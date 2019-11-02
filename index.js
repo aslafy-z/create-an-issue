@@ -9,6 +9,17 @@ function listToArray (list) {
   return Array.isArray(list) ? list : list.split(', ')
 }
 
+function buildSearchString (input = {}) {
+    let q = ['type:issue']
+    if (input.exact_text) q.push(`"${input.exact_text}"`)
+    if (input.in) q.push(`in:${input.in}`)
+    if (input.user) q.push(`user:${input.user}`)
+    if (input.assignees) q.push(...input.assignees.map(a => `assignee:${a}`))
+    if (input.labels) q.push(...input.labels.map(a => `label:${a}`))
+    if (input.milestone) q.push(`milestone:${input.milestone}`)
+    return q.join(' ')
+}
+
 Toolkit.run(async tools => {
   const template = core.getInput('filename') || '.github/ISSUE_TEMPLATE.md'
   const env = nunjucks.configure({ autoescape: false })
@@ -33,7 +44,41 @@ Toolkit.run(async tools => {
   }
 
   tools.log.debug('Templates compiled', templated)
-  tools.log.info(`Creating new issue ${templated.title}`)
+
+  if (core.getInput('check-duplicate')) {
+
+    tools.log.info(`Checking for existing issue '${templated.title}'`)
+
+    const query = buildSearchString({
+        exact_text: templated.title,
+        assignees: listToArray(attributes.assignees),
+        labels: listToArray(attributes.labels),
+        milestone: attributes.milestone
+    })
+
+    let search = null
+    try {
+        await tools.github.search.issuesAndPullRequests({
+            q: query,
+        })
+    } catch (err) {
+        // Log the error message
+        tools.log.error(`An error occurred while checking for duplicate issue. Query string: ${query}`)
+        tools.log.error(err)
+
+        // The error might have more details
+        if (err.errors) tools.log.error(err.errors)
+
+        // Exit with a failing status
+        tools.exit.failure()
+    }
+
+    if (search && search.total_count > 0 && search.items[0].score > 100) {
+        tools.exit.neutral(`Issue '${search.items[0].title} (${search.items[0].number})' already exists`)
+    }
+  }
+
+  tools.log.info(`Creating new issue '${templated.title}'`)
 
   // Create the new issue
   try {
